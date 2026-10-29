@@ -271,9 +271,10 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
     }
     const result = structuredClone({ $schema: 'https://json-schema.org/draft/2020-12/schema', ...roots, $defs: definitions });
     function finish(node) {
+      if (typeof node === 'number' && !Number.isFinite(node)) throw new Error('non-finite number in JSON Schema output');
       if (!node || typeof node !== 'object') return;
       if (node.type === 'object') node.required = Object.entries(node.properties).filter(([, value]) => !allowsUndefined(value)).map(([name]) => name);
-      for (const value of Object.values(node)) if (value && typeof value === 'object') Array.isArray(value) ? value.forEach(finish) : finish(value);
+      for (const value of Object.values(node)) Array.isArray(value) ? value.forEach(finish) : finish(value);
     }
     finish(result);
     return result;
