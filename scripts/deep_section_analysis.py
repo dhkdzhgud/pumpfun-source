@@ -571,7 +571,7 @@ def analyze_math_patterns(elf):
             })
 
     # Sort by arithmetic density
-    math_windows.sort(key=lambda w: -(w["multiplications"] + w["divisions"]))
+    math_windows.sort(key=lambda w: -w["arithmetic_density"])
 
     return {
         "math_intensive_windows": math_windows,

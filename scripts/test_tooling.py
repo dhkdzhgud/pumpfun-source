@@ -5,7 +5,39 @@ import unittest
 from types import SimpleNamespace
 import deep_section_analysis
 import analyze
+from window_elf_reader import Elf
 from compare import compare
+
+
+class MathDensityOrderTests(unittest.TestCase):
+    def analyze(self, windows):
+        data = bytearray()
+        entries = []
+        for opcodes in windows:
+            entries.append(len(data))
+            data.extend(b''.join(struct.pack('<BBhi', opcode, 0, 0, 0) for opcode in opcodes))
+        return deep_section_analysis.analyze_math_patterns(SimpleNamespace(b=bytes(data), entries=entries, hi=len(data), funcs=[]))
+
+    def test_addition_heavy_window_ranks_by_density(self):
+        report = self.analyze([[0x27, 0x37, *([0x07] * 3), *([0x95] * 15)], [0x07] * 5])
+        rows = report['math_intensive_windows']
+        self.assertEqual([row['arithmetic_density'] for row in rows], [1.0, 0.25])
+        self.assertEqual([row['address'] for row in rows], ['0xa0', '0x0'])
+        self.assertEqual(report['total_math_windows'], 2)
+        self.assertEqual(sum(row['additions'] for row in rows), 8)
+
+    def test_equal_density_preserves_entry_order(self):
+        rows = self.analyze([[0x07] * 5, [0x07] * 10])['math_intensive_windows']
+        self.assertEqual([row['address'] for row in rows], ['0x0', '0x28'])
+        self.assertEqual([row['arithmetic_density'] for row in rows], [1.0, 1.0])
+
+    def test_real_captured_math_windows_are_density_ordered(self):
+        for name in ('pump', 'pump_amm', 'pump_fees', 'mayhem'):
+            with self.subTest(program=name):
+                elf = Elf(analyze.ROOT / 'evidence/original' / name / 'deployed.so')
+                rows = deep_section_analysis.analyze_math_patterns(elf)['math_intensive_windows']
+                densities = [row['arithmetic_density'] for row in rows]
+                self.assertEqual(densities, sorted(densities, reverse=True))
 class ComparisonTests(unittest.TestCase):
     def test_equal(self): self.assertTrue(compare(b'abc\0\0',b'abc\0\0')['full_byte_equality'])
     def test_code_mutation(self): self.assertEqual(compare(b'abc\0\0',b'axc\0\0')['first_difference'],1)
