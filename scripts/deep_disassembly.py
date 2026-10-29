@@ -169,7 +169,9 @@ def decode_instruction(b, offset, elf):
             0xd4: "le", 0xdc: "be",
         }
         op = alu_map.get(opcode, f"alu_{opcode:#04x}")
-        if opcode & 0x08:
+        if opcode in (0x84, 0x87):
+            result["mnemonic"] = f"{op} {dst}"
+        elif opcode & 0x08:
             result["mnemonic"] = f"{op} {dst}, {src}"
         else:
             result["mnemonic"] = f"{op} {dst}, {imm}"
