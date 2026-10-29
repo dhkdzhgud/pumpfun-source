@@ -209,7 +209,7 @@ describe('duplicate query keys on GET /v1/pnl-leaderboard', () => {
     try {
       const res = await app.inject('/v1/pnl-leaderboard?period=daily&period=weekly');
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }
@@ -220,7 +220,7 @@ describe('duplicate query keys on GET /v1/pnl-leaderboard', () => {
     try {
       const res = await app.inject('/v1/pnl-leaderboard?period=weekly&limit=1&limit=2');
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }
@@ -232,7 +232,7 @@ describe('duplicate query keys on GET /v1/pnl-leaderboard', () => {
       for (const query of ['sort=realized&sort=combined', 'positionsLimit=1&positionsLimit=5']) {
         const res = await app.inject(`/v1/pnl-leaderboard?period=weekly&${query}`);
         assert.equal(res.statusCode, 501, query);
-        assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+        assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
       }
     } finally {
       await app.close();
@@ -244,7 +244,7 @@ describe('duplicate query keys on GET /v1/pnl-leaderboard', () => {
     try {
       const res = await app.inject('/v1/pnl-leaderboard?period=weekly&limit=1&%6cimit=2');
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }

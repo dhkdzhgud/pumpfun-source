@@ -24,7 +24,7 @@ describe('duplicate query keys on posts sub-resources', () => {
     try {
       const res = await app.inject(`/v1/posts/${POST_1}/replies?limit=1&limit=2`);
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }
@@ -35,7 +35,7 @@ describe('duplicate query keys on posts sub-resources', () => {
     try {
       const res = await app.inject(`/v1/posts/${POST_1}/likers?offset=0&offset=1`);
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }
@@ -46,7 +46,7 @@ describe('duplicate query keys on posts sub-resources', () => {
     try {
       const res = await app.inject(`/v1/posts/${POST_1}/quotes?cursor=abc&cursor=def`);
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }
@@ -57,7 +57,7 @@ describe('duplicate query keys on posts sub-resources', () => {
     try {
       const res = await app.inject(`/v1/posts/${POST_1}/reposters?limit=1&limit=2`);
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }
@@ -68,7 +68,7 @@ describe('duplicate query keys on posts sub-resources', () => {
     try {
       const res = await app.inject(`/v1/posts/${POST_1}?limit=1&limit=2`);
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }
@@ -79,7 +79,7 @@ describe('duplicate query keys on posts sub-resources', () => {
     try {
       const res = await app.inject(`/v1/posts/${POST_1}?%6cimit=1&limit=2`);
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }
@@ -101,7 +101,7 @@ describe('duplicate query keys on posts sub-resources', () => {
     try {
       const res = await app.inject(`/v1/posts/${POST_1}/replies?limit=1&%6cimit=2`);
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }

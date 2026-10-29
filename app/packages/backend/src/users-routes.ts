@@ -58,7 +58,7 @@ export function rejectDuplicateQueryKeys(request: { url: string }, reply: Fastif
   const keys = new Set<string>();
   for (const key of new URLSearchParams(request.url.slice(separator + 1)).keys()) {
     if (keys.has(key)) {
-      reply.code(501).send({ error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      reply.code(501).send(errorBody(501, 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED'));
       return true;
     }
     keys.add(key);

@@ -456,13 +456,14 @@ export function buildApp(fixtures: Fixture[] = [], opts: BuildAppOptions = {}) {
     if (new Set(entries.map(([key]) => key)).size !== entries.length) {
       return reply
         .code(501)
-        .send({ error: "DUPLICATE_QUERY_KEYS_UNIMPLEMENTED" });
+        .send({ statusCode: 501, error: "DUPLICATE_QUERY_KEYS_UNIMPLEMENTED" });
     }
     const fixture = fixtureMap.get(
       fixtureKey(request.method, pathname, Object.fromEntries(entries)),
     );
     if (!fixture) {
       return reply.code(501).send({
+        statusCode: 501,
         error: "COMPATIBILITY_NOT_IMPLEMENTED",
         method: request.method,
         path: pathname,

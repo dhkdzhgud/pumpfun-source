@@ -25,7 +25,7 @@ describe('duplicate query keys on competitions routes', () => {
     try {
       const res = await app.inject(`/v1/competitions/${LIVE_ID}?limit=1&limit=2`);
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }
@@ -36,7 +36,7 @@ describe('duplicate query keys on competitions routes', () => {
     try {
       const res = await app.inject(`/v1/competitions/${LIVE_ID}/highlights?perMemberLimit=1&perMemberLimit=2`);
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }
@@ -47,7 +47,7 @@ describe('duplicate query keys on competitions routes', () => {
     try {
       const res = await app.inject(`/v1/competitions/${LIVE_ID}/entries/${LIVE_ENTRY_1}/highlights?limit=1&limit=2`);
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }
@@ -58,11 +58,11 @@ describe('duplicate query keys on competitions routes', () => {
     try {
       const list = await app.inject('/v1/competitions?limit=1&limit=2');
       assert.equal(list.statusCode, 501);
-      assert.deepEqual(list.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(list.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
 
       const detail = await app.inject(`/v1/competitions/${LIVE_ID}/entries/${LIVE_ENTRY_1}?limit=1&limit=2`);
       assert.equal(detail.statusCode, 501);
-      assert.deepEqual(detail.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(detail.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }
@@ -73,7 +73,7 @@ describe('duplicate query keys on competitions routes', () => {
     try {
       const res = await app.inject(`/v1/competitions/${LIVE_ID}?limit=1&%6cimit=2`);
       assert.equal(res.statusCode, 501);
-      assert.deepEqual(res.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+      assert.deepEqual(res.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     } finally {
       await app.close();
     }

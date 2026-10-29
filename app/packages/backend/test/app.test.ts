@@ -406,6 +406,7 @@ test("unimplemented domain routes cannot pass as working APIs", async () => {
     });
     assert.equal(response.statusCode, 501);
     assert.deepEqual(response.json(), {
+      statusCode: 501,
       error: "COMPATIBILITY_NOT_IMPLEMENTED",
       method: "GET",
       path: "/v1/payouts/leaderboard",
@@ -646,6 +647,7 @@ test("repeated incoming query keys retain their explicit 501 response", async ()
     const response = await app.inject("/coins?limit=1&limit=2&offset=0");
     assert.equal(response.statusCode, 501);
     assert.deepEqual(response.json(), {
+      statusCode: 501,
       error: "DUPLICATE_QUERY_KEYS_UNIMPLEMENTED",
     });
   } finally {
@@ -662,6 +664,7 @@ test("unsupported incoming methods cannot match a read-only fixture", async () =
     });
     assert.equal(response.statusCode, 501);
     assert.deepEqual(response.json(), {
+      statusCode: 501,
       error: "COMPATIBILITY_NOT_IMPLEMENTED",
       method: "POST",
       path: "/coins",

@@ -109,7 +109,7 @@ for (const request of nativeReadRequests) {
     t.after(() => app.close());
     const reference = await app.inject('/services/profile/unimplemented?extra=one&extra=two');
     assert.equal(reference.statusCode, 501);
-    assert.deepEqual(reference.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+    assert.deepEqual(reference.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
     // Compare with the existing replay boundary rather than invent upstream semantics.
     const separator = request.url.includes('?') ? '&' : '?';
     const response = await app.inject({ ...request, url: `${request.url}${separator}extra=one&%65xtra=two` });
@@ -135,7 +135,7 @@ for (const url of [
     t.after(() => app.close());
     const response = await app.inject(url);
     assert.equal(response.statusCode, 501);
-    assert.deepEqual(response.json(), { error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
+    assert.deepEqual(response.json(), { statusCode: 501, error: 'DUPLICATE_QUERY_KEYS_UNIMPLEMENTED' });
   });
 }
 
