@@ -149,6 +149,21 @@ export class UserStore {
 
   constructor(seed?: User[], verifiedIds?: string[] | Set<string>) {
     this.users = structuredClone(seed ?? users);
+    for (const user of this.users) {
+      if (typeof user.address !== 'string') throw new TypeError('User address must be a string');
+      for (const field of ['username', 'profile_image', 'bio', 'x_username'] as const) {
+        if (user[field] !== null && typeof user[field] !== 'string')
+          throw new TypeError(`User ${field} must be a string or null`);
+      }
+      for (const field of ['header_image_url', 'avatar_decoration', 'resolved_avatar_decoration', 'last_active_at'] as const) {
+        if (user[field] !== undefined && user[field] !== null && typeof user[field] !== 'string')
+          throw new TypeError(`User ${field} must be a string or null when supplied`);
+      }
+      for (const field of ['userId', 'wallet_label', 'canonical_svm_wallet', 'canonical_evm_wallet'] as const) {
+        if (user[field] !== undefined && typeof user[field] !== 'string')
+          throw new TypeError(`User ${field} must be a string when supplied`);
+      }
+    }
     const identities = new Set<string>();
     for (const user of this.users) {
       for (const id of new Set([user.address, user.userId].filter((id): id is string => typeof id === 'string' && id !== ''))) {
