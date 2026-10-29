@@ -23,6 +23,23 @@ def logs(value):
     return result
 
 
+def panic_message(line):
+    """Remove only recognized Rust PanicInfo location syntax, never an arbitrary line."""
+    prefix = 'Program log: panicked at '
+    if not line.startswith(prefix):
+        return line
+    text = line.removeprefix(prefix)
+    source, separator, message = text.partition('\n')
+    # Rust's location-first form: file:line:column:\nmessage.
+    if re.fullmatch(r"(?!['\"])[^\r\n]+:[0-9]+:[0-9]+:", source):
+        return message if separator else ''
+    # Earlier Rust displays quote the message before the source location.
+    legacy = re.fullmatch(r"'(.*)', [^\r\n]+:[0-9]+:[0-9]+", text, re.S)
+    if legacy:
+        return legacy.group(1)
+    return line
+
+
 def messages(lines):
     panic, anchor, compared, origins = [], [], [], []
     pending = None
@@ -41,7 +58,7 @@ def messages(lines):
         else:
             pending = None
         if 'panicked at ' in line:
-            panic.append(line.split('\n', 1)[1] if '\n' in line else line)
+            panic.append(panic_message(line))
         if 'AnchorError' in line:
             name = re.search(r'caused by account: ([^.]*)\.', line)
             origins.append(['account', name.group(1)] if name else

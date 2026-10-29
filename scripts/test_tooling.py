@@ -1,11 +1,72 @@
 #!/usr/bin/env python3
 """Mutation tests ensuring the byte comparator cannot hide code/padding changes."""
 import struct
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 import deep_section_analysis
 import analyze
+import pump_diagnostic_audit
 from compare import compare
+
+
+class PanicPayloadTests(unittest.TestCase):
+    def audit(self, left, right):
+        return pump_diagnostic_audit.audit({'synthetic': {'cases': [{
+            'original': {'logs': [left]}, 'candidate': {'logs': [right]},
+        }]}})
+
+    def test_legacy_multiline_first_line_is_not_discarded(self):
+        result = self.audit("Program log: panicked at 'first A\nshared tail', src/lib.rs:1:2",
+                            "Program log: panicked at 'first B\nshared tail', src/lib.rs:1:2")
+        self.assertEqual(result['log_bearing_cases'], 1)
+        self.assertEqual(len(result['mismatches']), 1)
+        self.assertEqual(result['mismatches'][0]['original']['panic'], ['first A\nshared tail'])
+
+    def test_legacy_source_locations_are_excluded_from_the_payload(self):
+        for message in ('same message', "same 'quoted' message\nsecond line"):
+            with self.subTest(message=message):
+                result = self.audit(f"Program log: panicked at '{message}', old/src.rs:1:2",
+                                    f"Program log: panicked at '{message}', new/src.rs:90:7")
+                self.assertEqual(result['mismatches'], [])
+
+    def test_modern_payload_and_location_boundary_are_preserved(self):
+        result = self.audit('Program log: panicked at old/src.rs:1:2:\nfirst\nsecond',
+                            'Program log: panicked at new/src.rs:90:7:\nfirst\nsecond')
+        self.assertEqual(result['mismatches'], [])
+        self.assertEqual(pump_diagnostic_audit.messages(['Program log: panicked at src.rs:1:2:\nfirst\nsecond'])['panic'], ['first\nsecond'])
+
+    def test_unrecognized_multiline_text_is_compared_in_full(self):
+        for left, right in (
+            ('custom first A\nshared tail', 'custom first B\nshared tail'),
+            ('message A:١:٢:\nshared tail', 'message B:١:٢:\nshared tail'),
+        ):
+            with self.subTest(left=left):
+                result = self.audit('Program log: panicked at ' + left, 'Program log: panicked at ' + right)
+                self.assertEqual(len(result['mismatches']), 1)
+
+    def test_real_cli_fails_for_a_changed_legacy_first_line(self):
+        temporary_root = analyze.ROOT / 'work'
+        temporary_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='panic-audit-', dir=temporary_root) as folder:
+            report, output = Path(folder) / 'input.json', Path(folder) / 'output.json'
+            data = {'suites': {'synthetic': {'cases': [{
+                'original': {'logs': ["Program log: panicked at 'A\nshared', src.rs:1:2"]},
+                'candidate': {'logs': ["Program log: panicked at 'B\nshared', src.rs:1:2"]},
+            }]}}}
+            raw = json.dumps(data).encode('utf-8')
+            report.write_bytes(raw)
+            result = subprocess.run([sys.executable, pump_diagnostic_audit.__file__, '--report', str(report), '--output', str(output)], capture_output=True)
+            self.assertEqual(result.returncode, 1)
+            audited = json.loads(output.read_text(encoding='utf-8'))
+            self.assertEqual(len(audited['mismatches']), 1)
+            self.assertEqual(audited['source_report_sha256'], hashlib.sha256(raw).hexdigest())
+            self.assertEqual(report.read_bytes(), raw)
 class ComparisonTests(unittest.TestCase):
     def test_equal(self): self.assertTrue(compare(b'abc\0\0',b'abc\0\0')['full_byte_equality'])
     def test_code_mutation(self): self.assertEqual(compare(b'abc\0\0',b'axc\0\0')['first_difference'],1)
