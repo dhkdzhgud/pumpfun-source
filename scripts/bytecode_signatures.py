@@ -196,9 +196,10 @@ def detect_serialization_patterns(elf, start, end):
             if uimm == 0xa22b9c85:  # sol_memcpy_
                 memcpy_count += 1
 
+    max_sequential = max(max_sequential, current_run)
     return {
         "sequential_stores": sequential_stores,
-        "max_store_run": max(max_sequential, current_run),
+        "max_store_run": max_sequential,
         "memcpy_calls": memcpy_count,
         "likely_serialization": max_sequential >= 4 or memcpy_count >= 2,
     }
