@@ -220,7 +220,8 @@ export class LeaderboardStore {
     const ranked = [...(this.boards[query.period] ?? [])].sort((a, b) => {
       const delta = this.sortValue(b, sort) - this.sortValue(a, sort);
       if (delta !== 0) return delta;
-      return a.walletAddress.localeCompare(b.walletAddress);
+      return a.walletAddress.localeCompare(b.walletAddress) ||
+        (a.walletAddress === b.walletAddress ? 0 : a.walletAddress < b.walletAddress ? -1 : 1);
     });
 
     const entries = ranked
