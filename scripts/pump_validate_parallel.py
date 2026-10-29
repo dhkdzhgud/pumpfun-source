@@ -37,7 +37,7 @@ def validate_result(name, result, candidate, original):
     else:
         assert result.get('original_sha256', result.get('provenance', {}).get(str(original))) == sha(original)
         assert result.get('candidate_sha256', result.get('provenance', {}).get(str(candidate))) == sha(candidate)
-        count = result['case_count'] if 'case_count' in result else len(result['cases'])
+        count = base.retained_case_count(result)
     assert count == base.EXPECTED_CASES[name], (name, count, base.EXPECTED_CASES[name])
     assert not result.get('mismatches', result.get('failures', [])), name
     return count
