@@ -66,8 +66,12 @@ def matches(row, args):
     if getattr(args, 'status', None) and row.get('status') != args.status:
         return False
     if getattr(args, 'text', None):
-        blob = json.dumps(row).lower()
-        return all(word.lower() in blob for word in args.text.split())
+        blob = json.dumps(row, ensure_ascii=False).lower()
+        # Preserve serialized-metadata queries and also match literal text
+        # inside JSON strings (quotes and backslashes are escaped there).
+        return all(word.lower() in blob or
+                   json.dumps(word.lower(), ensure_ascii=False)[1:-1] in blob
+                   for word in args.text.split())
     return True
 
 
