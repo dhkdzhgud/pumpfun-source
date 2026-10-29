@@ -2,10 +2,70 @@
 """Mutation tests ensuring the byte comparator cannot hide code/padding changes."""
 import struct
 import unittest
+import gzip
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
 from types import SimpleNamespace
 import deep_section_analysis
 import analyze
 from compare import compare
+class DiagnosticOutputPreservationTests(unittest.TestCase):
+    def invoke(self, source, output):
+        return subprocess.run([sys.executable, str(analyze.ROOT / 'scripts/pump_diagnostic_audit.py'),
+                               '--report', str(source), '--output', str(output)],
+                              capture_output=True, text=True)
+
+    def test_input_report_cannot_be_its_own_output(self):
+        parent = analyze.ROOT / 'work'
+        parent.mkdir(exist_ok=True)
+        for compressed in (False, True):
+            with self.subTest(compressed=compressed), tempfile.TemporaryDirectory(dir=parent) as folder:
+                source = Path(folder) / 'report.json'
+                raw = json.dumps({'suites': {}}).encode()
+                if compressed:
+                    raw = gzip.compress(raw, mtime=0)
+                source.write_bytes(raw)
+                result = self.invoke(source, source)
+                self.assertEqual(source.read_bytes(), raw)
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_prior_audit_is_preserved(self):
+        parent = analyze.ROOT / 'work'
+        parent.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=parent) as folder:
+            source, output = Path(folder) / 'report.json', Path(folder) / 'audit.json'
+            raw = b'{"suites":{}}'
+            prior = b'previous bounded audit\n'
+            source.write_bytes(raw)
+            output.write_bytes(prior)
+            result = self.invoke(source, output)
+            self.assertEqual(output.read_bytes(), prior)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(source.read_bytes(), raw)
+
+    def test_fresh_outputs_preserve_success_and_mismatch_receipts(self):
+        parent = analyze.ROOT / 'work'
+        parent.mkdir(exist_ok=True)
+        for different in (False, True):
+            with self.subTest(different=different), tempfile.TemporaryDirectory(dir=parent) as folder:
+                source, output = Path(folder) / 'report.json', Path(folder) / 'audit.json'
+                logs = ['Program log: AnchorError. Error Code: One. Error Number: 6000. Error Message: original']
+                other = [logs[0].replace('original', 'different')] if different else logs
+                raw = json.dumps({'suites': {'fixture': {'original': {'logs': logs}, 'candidate': {'logs': other}}}}).encode()
+                source.write_bytes(raw)
+                result = self.invoke(source, output)
+                self.assertEqual(result.returncode, int(different), result.stderr)
+                receipt = json.loads(output.read_bytes())
+                self.assertEqual(receipt['source_report_sha256'], hashlib.sha256(raw).hexdigest())
+                self.assertEqual(receipt['log_bearing_cases'], 1)
+                self.assertEqual(len(receipt['mismatches']), int(different))
+                self.assertEqual(source.read_bytes(), raw)
+
+
 class ComparisonTests(unittest.TestCase):
     def test_equal(self): self.assertTrue(compare(b'abc\0\0',b'abc\0\0')['full_byte_equality'])
     def test_code_mutation(self): self.assertEqual(compare(b'abc\0\0',b'axc\0\0')['first_difference'],1)
