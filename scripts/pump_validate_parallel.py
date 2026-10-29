@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Build-bound parallel execution of the unchanged 44-suite main-Pump corpus."""
+if not __debug__:
+    raise SystemExit('Normal Python is required; do not use -O or PYTHONOPTIMIZE.')
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import gzip

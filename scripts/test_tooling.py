@@ -1,11 +1,74 @@
 #!/usr/bin/env python3
 """Mutation tests ensuring the byte comparator cannot hide code/padding changes."""
 import struct
+import os
+import subprocess
+import sys
 import unittest
 from types import SimpleNamespace
 import deep_section_analysis
 import analyze
 from compare import compare
+
+
+class CorpusOptimizationTests(unittest.TestCase):
+    def run_script(self, name, flags=(), optimize=None):
+        env = dict(os.environ)
+        env.pop('PYTHONOPTIMIZE', None)
+        if optimize is not None:
+            env['PYTHONOPTIMIZE'] = optimize
+        return subprocess.run([sys.executable, *flags, str(analyze.ROOT / 'scripts' / name), '--help'],
+                              env=env, capture_output=True)
+
+    def test_optimized_import_cannot_admit_an_invalid_report(self):
+        code = '''import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import pump_validate_parallel as runner
+artifact = Path(sys.argv[2])
+report = {'original_sha256': 'wrong', 'candidate_sha256': 'wrong',
+          'case_count': 66, 'cases': [], 'mismatches': ['synthetic failure']}
+print(runner.validate_result('volume', report, artifact, artifact))
+'''
+        for flag in ('-O', '-OO'):
+            with self.subTest(flag=flag):
+                result = subprocess.run([sys.executable, flag, '-c', code, str(analyze.ROOT / 'scripts'),
+                                         str(analyze.ROOT / 'evidence/original/pump/deployed.so')], capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b'Normal Python is required', result.stderr)
+
+    def test_both_clis_reject_optimized_startup(self):
+        for name in ('pump_validate_all.py', 'pump_validate_parallel.py'):
+            for flags, environment in ((('-O',), None), (('-OO',), None), ((), '1')):
+                with self.subTest(script=name, flags=flags, environment=environment):
+                    result = self.run_script(name, flags, environment)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(b'Normal Python is required', result.stderr)
+
+    def test_both_normal_clis_remain_available(self):
+        for name in ('pump_validate_all.py', 'pump_validate_parallel.py'):
+            with self.subTest(script=name):
+                result = self.run_script(name)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(b'--candidate', result.stdout)
+
+    def test_normal_mode_still_rejects_invalid_artifact_bindings(self):
+        code = '''import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import pump_validate_parallel as runner
+artifact = Path(sys.argv[2])
+runner.validate_result('volume', {'original_sha256': 'wrong', 'candidate_sha256': 'wrong',
+                                 'case_count': 66, 'cases': [], 'mismatches': ['synthetic failure']},
+                       artifact, artifact)
+'''
+        env = dict(os.environ)
+        env.pop('PYTHONOPTIMIZE', None)
+        result = subprocess.run([sys.executable, '-c', code, str(analyze.ROOT / 'scripts'),
+                                 str(analyze.ROOT / 'evidence/original/pump/deployed.so')], env=env, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'AssertionError', result.stderr)
+        self.assertNotIn(b'Normal Python is required', result.stderr)
 class ComparisonTests(unittest.TestCase):
     def test_equal(self): self.assertTrue(compare(b'abc\0\0',b'abc\0\0')['full_byte_equality'])
     def test_code_mutation(self): self.assertEqual(compare(b'abc\0\0',b'axc\0\0')['first_difference'],1)

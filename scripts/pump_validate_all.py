@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Run the published 44-suite bounded Pump corpus against one compiled ELF."""
+if not __debug__:
+    raise SystemExit('Normal Python is required; do not use -O or PYTHONOPTIMIZE.')
 import argparse
 import gzip
 import hashlib
