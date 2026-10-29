@@ -539,7 +539,11 @@ export function normalizeGoQuery(parameters: URLSearchParams): {
   } catch {
     const safe = new URLSearchParams();
     const q = parameters.get("q");
-    if (q !== null) safe.set("q", q.slice(0, MAX_SEARCH_LENGTH));
+    if (q !== null) {
+      // Keep the existing UTF-16 bound without retaining half of a character.
+      const bounded = q.slice(0, MAX_SEARCH_LENGTH);
+      safe.set("q", bounded.replace(/[\uD800-\uDBFF]$/u, ""));
+    }
     const status = parameters.get("status");
     if (
       status !== null &&

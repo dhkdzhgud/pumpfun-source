@@ -97,6 +97,23 @@ test("bounds and canonicalizes public query state", () => {
   assert.equal(normalized.query.status, "ALL");
 });
 
+test("overlong GO search recovery preserves complete Unicode characters", () => {
+  const raw = "x".repeat(255) + "😀";
+  const normalized = normalizeGoQuery(new URLSearchParams({ q: raw }));
+  assert.equal(normalized.ignoredInvalidState, true);
+  assert.equal(normalized.query.q, "x".repeat(255));
+  const reparsed = parseGoQuery(new URLSearchParams({ q: normalized.query.q }));
+  assert.equal(reparsed.q, normalized.query.q, "recovery must survive URL serialization without replacement characters");
+});
+
+test("GO recovery retains the existing UTF-16 limit and complete boundary characters", () => {
+  const exact = "x".repeat(254) + "😀";
+  assert.equal(parseGoQuery(new URLSearchParams({ q: exact })).q, exact);
+  assert.equal(normalizeGoQuery(new URLSearchParams({ q: exact, unsupported: "1" })).query.q, exact);
+  assert.equal(normalizeGoQuery(new URLSearchParams({ q: "a".repeat(257) })).query.q, "a".repeat(256));
+  assert.throws(() => parseGoQuery(new URLSearchParams({ q: "😀".repeat(129) })), GoQueryError);
+});
+
 test("search, validated sorting and cursor pagination are deterministic", async () => {
   const { value } = await snapshot();
   const base = {
