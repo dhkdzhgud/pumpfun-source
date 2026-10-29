@@ -535,7 +535,7 @@ def main():
     # 9. Summary
     summary = {
         "program": args.program,
-        "deployed_sha256": sha256_file(str(deployed_path)),
+        "deployed_sha256": hashlib.sha256(elf.b).hexdigest(),
         "text_section_bytes": elf.hi - elf.lo,
         "total_windows": len(entries),
         "total_instructions": sum(w["instruction_count"] for w in all_windows),

@@ -645,7 +645,7 @@ def main():
     text_bytes = elf.hi - elf.lo
     summary = {
         "program": args.program,
-        "deployed_sha256": sha256_file(str(deployed_path)),
+        "deployed_sha256": sha256_bytes(elf.b),
         "text_bytes": text_bytes,
         "layer1_data_layout": {
             "sections_analyzed": len(data_layout),

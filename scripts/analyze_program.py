@@ -156,8 +156,8 @@ def analyze_program(program_name, output_dir):
     summary = {
         "program": program_name,
         "deployed_path": str(deployed_path.relative_to(REPO)),
-        "deployed_sha256": sha256_file(deployed_path),
-        "file_size": deployed_path.stat().st_size,
+        "deployed_sha256": hashlib.sha256(elf.b).hexdigest(),
+        "file_size": len(elf.b),
         "text_section": {
             "start": hex(elf.lo),
             "end": hex(elf.hi),
@@ -213,8 +213,8 @@ def analyze_program(program_name, output_dir):
 
 ## Source
 - Binary: `{deployed_path.relative_to(REPO)}`
-- SHA-256: `{sha256_file(deployed_path)}`
-- File size: {deployed_path.stat().st_size:,} bytes
+- SHA-256: `{summary["deployed_sha256"]}`
+- File size: {summary["file_size"]:,} bytes
 
 ## .text Section
 - Start: `{hex(elf.lo)}`
