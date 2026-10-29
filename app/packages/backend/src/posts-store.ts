@@ -105,7 +105,7 @@ export interface Post {
   reposted: Post | null;
 }
 
-export const SYNTHETIC_POSTS_SEED: readonly RawPost[] = seedData as RawPost[];
+export const SYNTHETIC_POSTS_SEED: readonly RawPost[] = structuredClone(seedData as RawPost[]);
 
 export function userToProfile(user: User, isVerified: boolean): UserProfile {
   return {

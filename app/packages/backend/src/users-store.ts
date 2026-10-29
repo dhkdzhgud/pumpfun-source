@@ -76,7 +76,7 @@ const users: User[] = seedData as User[];
  * header set by users-routes.ts, and NATIVE-USERS.md. Nothing here is evidence of
  * real pump.fun users, and no claim of API qualification rests on it.
  */
-export const SYNTHETIC_SEED: readonly User[] = users;
+export const SYNTHETIC_SEED: readonly User[] = structuredClone(users);
 export const DATA_SOURCE = 'synthetic-seed-play' as const;
 
 /** Index by address for O(1) lookup. */
