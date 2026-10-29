@@ -49,6 +49,35 @@ class SerializationBoundaryTests(unittest.TestCase):
                 self.assertTrue(result['likely_serialization'])
 
 
+class PatternTailScanTests(unittest.TestCase):
+    def test_error_branch_in_last_instruction_is_scanned(self):
+        raw = struct.pack('<BBhi', 0xb7, 0, 0, 6000) + struct.pack('<BBhi', 0x15, 0, -2, 0)
+        result = bytecode_signatures.detect_error_patterns(SimpleNamespace(b=raw), 0, len(raw))
+        self.assertEqual(result, [{'offset': 8, 'branch_target_offset': 0, 'error_code': 6000, 'type': 'conditional_error'}])
+
+    def test_account_pair_uses_only_its_two_instruction_extent(self):
+        raw = struct.pack('<BBhi', 0x79, 1, 0, 0) + struct.pack('<BBhi', 0x55, 1, 0, 8)
+        result = bytecode_signatures.detect_account_validation(SimpleNamespace(b=raw), 0, len(raw))
+        self.assertEqual(result['discriminator_checks'], 1)
+        self.assertTrue(result['likely_account_validation'])
+
+    def test_single_owner_field_load_is_included(self):
+        raw = struct.pack('<BBhi', 0x79, 1, 32, 0)
+        result = bytecode_signatures.detect_account_validation(SimpleNamespace(b=raw), 0, len(raw))
+        self.assertEqual(result['owner_field_accesses'], 1)
+        self.assertFalse(result['likely_account_validation'])
+
+    def test_empty_ranges_are_empty(self):
+        elf = SimpleNamespace(b=b'')
+        self.assertEqual(bytecode_signatures.detect_error_patterns(elf, 0, 0), [])
+        self.assertEqual(bytecode_signatures.detect_account_validation(elf, 0, 0)['owner_field_accesses'], 0)
+
+    def test_retained_pump_terminal_branch(self):
+        elf = Elf(analyze.ROOT / 'evidence/original/pump/deployed.so')
+        result = bytecode_signatures.detect_error_patterns(elf, 0xef40, 0xefc8)
+        self.assertIn({'offset': 120, 'branch_target_offset': 24, 'error_code': 0, 'type': 'conditional_error'}, result)
+
+
 class RelocationTargetTests(unittest.TestCase):
     def test_target_section_uses_address_not_file_offset(self):
         blob = bytearray(64)
