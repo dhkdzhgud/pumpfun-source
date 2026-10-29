@@ -610,6 +610,7 @@ python3 verify.py
 import hashlib, json, os, sys
 
 PACKET = os.path.dirname(os.path.abspath(__file__))
+EXPECTED_FILES = frozenset(__EXPECTED_PACKET_FILES__)
 
 def sha256_file(path):
     h = hashlib.sha256()
@@ -620,6 +621,8 @@ def sha256_file(path):
 
 def main():
     manifest = json.load(open(os.path.join(PACKET, "manifest.json")))
+    if not isinstance(manifest, dict) or set(manifest) != EXPECTED_FILES:
+        print("FAIL: manifest artifact set mismatch"); return 1
     errors = 0
     for name, expected in manifest.items():
         path = os.path.join(PACKET, name)
@@ -643,6 +646,11 @@ def main():
 if __name__ == "__main__":
     sys.exit(main())
 '''
+    verify_py = verify_py.replace('__EXPECTED_PACKET_FILES__', repr([
+        'README.md', 'disassembly.json.gz', 'dispatch-table.json', 'error-strings.json',
+        'extern-usage.json', 'fingerprints.json', 'rodata-strings.json', 'summary.json',
+        'syscall-usage.json', 'verify.py', 'windows-deep.json',
+    ]))
     (output_dir / "verify.py").write_text(verify_py)
 
     # 12. Manifest

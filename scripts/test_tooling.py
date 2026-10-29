@@ -1,11 +1,132 @@
 #!/usr/bin/env python3
 """Mutation tests ensuring the byte comparator cannot hide code/padding changes."""
 import struct
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 import deep_section_analysis
 import analyze
 from compare import compare
+
+
+class GeneratedPacketMembershipTests(unittest.TestCase):
+    generators = (
+        ('analyze_program.py', 'function-index.json'),
+        ('deep_disassembly.py', 'fingerprints.json'),
+        ('deep_section_analysis.py', 'summary.json'),
+        ('bytecode_signatures.py', 'shared-signatures.json'),
+    )
+
+    @classmethod
+    def run_python(cls, script, *arguments):
+        env = dict(os.environ, PYTHONUTF8='1')
+        return subprocess.run([sys.executable, str(script), *map(str, arguments)],
+                              env=env, capture_output=True, timeout=60)
+
+    @classmethod
+    def setUpClass(cls):
+        folder = analyze.ROOT / 'work'
+        folder.mkdir(exist_ok=True)
+        cls.temporary = tempfile.TemporaryDirectory(prefix='packet-membership-', dir=folder)
+        cls.addClassCleanup(cls.temporary.cleanup)
+        cls.root = Path(cls.temporary.name)
+        cls.packets = {}
+        for script, _ in cls.generators:
+            output = cls.root / Path(script).stem
+            arguments = [] if script == 'bytecode_signatures.py' else ['--program', 'mayhem']
+            result = cls.run_python(analyze.ROOT / 'scripts' / script, *arguments, '--output', output)
+            if result.returncode:
+                raise AssertionError(result.stdout + result.stderr)
+            cls.packets[script] = output
+
+    def test_complete_generated_packets_verify(self):
+        for name, output in self.packets.items():
+            with self.subTest(generator=name):
+                result = self.run_python(output / 'verify.py')
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_missing_artifact_cannot_be_removed_from_the_manifest(self):
+        for script, target in self.generators:
+            with self.subTest(generator=script):
+                output = self.packets[script]
+                manifest_path = output / 'manifest.json'
+                raw, artifact = manifest_path.read_bytes(), (output / target).read_bytes()
+                manifest = json.loads(raw)
+                del manifest[target]
+                try:
+                    (output / target).unlink()
+                    manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+                    self.assertNotEqual(self.run_python(output / 'verify.py').returncode, 0)
+                finally:
+                    (output / target).write_bytes(artifact)
+                    manifest_path.write_bytes(raw)
+
+    def test_existing_artifact_cannot_be_left_unmanifested(self):
+        for script, target in self.generators:
+            with self.subTest(generator=script):
+                output = self.packets[script]
+                path = output / 'manifest.json'
+                raw = path.read_bytes()
+                manifest = json.loads(raw)
+                del manifest[target]
+                try:
+                    path.write_text(json.dumps(manifest), encoding='utf-8')
+                    self.assertNotEqual(self.run_python(output / 'verify.py').returncode, 0)
+                finally:
+                    path.write_bytes(raw)
+
+    def test_unrelated_file_cannot_be_admitted_by_adding_its_hash(self):
+        for script, _ in self.generators:
+            with self.subTest(generator=script):
+                output = self.packets[script]
+                path = output / 'manifest.json'
+                raw = path.read_bytes()
+                manifest = json.loads(raw)
+                extra = output / 'unrelated.txt'
+                data = b'not produced by the generator'
+                try:
+                    extra.write_bytes(data)
+                    manifest[extra.name] = hashlib.sha256(data).hexdigest()
+                    path.write_text(json.dumps(manifest), encoding='utf-8')
+                    self.assertNotEqual(self.run_python(output / 'verify.py').returncode, 0)
+                finally:
+                    extra.unlink()
+                    path.write_bytes(raw)
+
+    def test_existing_digest_checks_still_reject_changed_bytes(self):
+        for script, target in self.generators:
+            with self.subTest(generator=script):
+                output = self.packets[script]
+                artifact = output / target
+                raw = artifact.read_bytes()
+                try:
+                    artifact.write_bytes(raw + b'\n ')
+                    self.assertNotEqual(self.run_python(output / 'verify.py').returncode, 0)
+                finally:
+                    artifact.write_bytes(raw)
+
+    def test_partial_signature_packet_keeps_its_generated_program_set(self):
+        view = self.root / 'partial-view'
+        (view / 'scripts').mkdir(parents=True)
+        capture = view / 'evidence/original/mayhem/deployed.so'
+        capture.parent.mkdir(parents=True)
+        shutil.copyfile(analyze.ROOT / 'evidence/original/mayhem/deployed.so', capture)
+        for name in ('bytecode_signatures.py', 'window_elf_reader.py'):
+            shutil.copyfile(analyze.ROOT / 'scripts' / name, view / 'scripts' / name)
+        output = view / 'packet'
+        generated = self.run_python(view / 'scripts/bytecode_signatures.py', '--output', output)
+        self.assertEqual(generated.returncode, 0, generated.stdout + generated.stderr)
+        self.assertEqual(self.run_python(output / 'verify.py').returncode, 0)
+        manifest = json.loads((output / 'manifest.json').read_bytes())
+        self.assertIn('mayhem-signatures.json', manifest)
+        self.assertNotIn('pump-signatures.json', manifest)
 class ComparisonTests(unittest.TestCase):
     def test_equal(self): self.assertTrue(compare(b'abc\0\0',b'abc\0\0')['full_byte_equality'])
     def test_code_mutation(self): self.assertEqual(compare(b'abc\0\0',b'axc\0\0')['first_difference'],1)
