@@ -5,7 +5,40 @@ import unittest
 from types import SimpleNamespace
 import deep_section_analysis
 import analyze
+import deep_disassembly
 from compare import compare
+
+
+class StackAddressOperandTests(unittest.TestCase):
+    def analyze(self, *instructions):
+        raw = b''.join(struct.pack('<BBhi', *instruction) for instruction in instructions)
+        decoded = []
+        for offset in range(0, len(raw), 8):
+            decoded.append(deep_disassembly.decode_instruction(raw, offset, None)[0])
+        return deep_disassembly.analyze_stack_frame(decoded)
+
+    def test_storing_frame_pointer_value_is_not_a_stack_address(self):
+        # stxdw [r1-64], r10: r1 is the address; r10 is only the stored value.
+        result = self.analyze((0x7b, 0xa1, -64, 0))
+        self.assertEqual(result, {'max_stack_depth': 0, 'stack_slots': 0, 'most_accessed_offsets': []})
+
+    def test_frame_pointer_as_both_base_and_value_counts_once(self):
+        result = self.analyze((0x7b, 0xaa, -16, 0))
+        self.assertEqual(result['max_stack_depth'], 16)
+        self.assertEqual(result['most_accessed_offsets'], [{'offset': -16, 'count': 1}])
+
+    def test_load_and_store_address_bases_keep_real_stack_accesses(self):
+        result = self.analyze(
+            (0x79, 0xa2, -24, 0),  # ldxdw r2, [r10-24]
+            (0x7b, 0x2a, -24, 0),  # stxdw [r10-24], r2
+            (0x7a, 0x0a, -8, 5),  # stdw [r10-8], 5
+        )
+        self.assertEqual(result['max_stack_depth'], 24)
+        self.assertEqual(result['stack_slots'], 2)
+        self.assertEqual(result['most_accessed_offsets'], [{'offset': -24, 'count': 2}, {'offset': -8, 'count': 1}])
+
+    def test_nonmemory_frame_pointer_operand_does_not_count(self):
+        self.assertEqual(self.analyze((0xbf, 0xa1, 0, 0))['stack_slots'], 0)
 class ComparisonTests(unittest.TestCase):
     def test_equal(self): self.assertTrue(compare(b'abc\0\0',b'abc\0\0')['full_byte_equality'])
     def test_code_mutation(self): self.assertEqual(compare(b'abc\0\0',b'axc\0\0')['first_difference'],1)

@@ -298,11 +298,12 @@ def analyze_stack_frame(instructions):
     stack_accesses = collections.Counter()
     max_depth = 0
     for insn in instructions:
-        if insn.get("memory_access") and insn["dst"] == 10:
-            stack_accesses[insn["off"]] += 1
-            if insn["off"] < 0:
-                max_depth = max(max_depth, -insn["off"])
-        if insn.get("memory_access") and insn["src"] == 10:
+        if not insn.get("memory_access"):
+            continue
+        # LDX addresses through src; ST/STX address through dst. The other
+        # register can carry the frame pointer as data without addressing it.
+        base = insn["src"] if int(insn["opcode"], 16) & 7 == BPF_LDX else insn["dst"]
+        if base == 10:
             stack_accesses[insn["off"]] += 1
             if insn["off"] < 0:
                 max_depth = max(max_depth, -insn["off"])
