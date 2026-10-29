@@ -38,26 +38,27 @@ def sha256_file(path):
 
 
 SYSCALL_NAMES = {
-    0xb6fc1a11: "sol_log_",
-    0x207559bd: "sol_log_64_",
-    0x5c2a3178: "sol_log_compute_units_",
-    0x52ba5096: "sol_create_program_address",
-    0x48f18ece: "sol_try_find_program_address",
-    0x717cc4a3: "sol_sha256",
-    0x3770fb22: "sol_keccak256",
-    0xa22b9c85: "sol_memcpy_",
-    0x5fdcde31: "sol_memmove_",
-    0x73e3b3f5: "sol_memcmp_",
-    0x3b97b73c: "sol_memset_",
-    0xd56b5fe9: "sol_invoke_signed_c",
-    0xe4042040: "sol_invoke_signed_rust",
+    # SBPF hash_symbol_name: seed-zero MurmurHash3 x86_32 of symbol bytes.
+    0x207559bd: "sol_log_",
+    0x5c2a3178: "sol_log_64_",
+    0x52ba5096: "sol_log_compute_units_",
+    0x9377323c: "sol_create_program_address",
+    0x48504a38: "sol_try_find_program_address",
+    0x11f49d86: "sol_sha256",
+    0xd7793abb: "sol_keccak256",
+    0x717cc4a3: "sol_memcpy_",
+    0x434371f8: "sol_memmove_",
+    0x5fdcde31: "sol_memcmp_",
+    0x3770fb22: "sol_memset_",
+    0xa22b9c85: "sol_invoke_signed_c",
+    0xd7449092: "sol_invoke_signed_rust",
     0x83f00e8f: "sol_alloc_free_",
-    0x5be92f43: "sol_set_return_data",
-    0x33ef6958: "sol_get_return_data",
-    0xe2e10497: "sol_log_data",
-    0xfee07a55: "sol_get_clock_sysvar",
-    0xe7ce47dc: "sol_get_rent_sysvar",
-    0xcccd2005: "sol_remaining_compute_units",
+    0xa226d3eb: "sol_set_return_data",
+    0x5d2245e4: "sol_get_return_data",
+    0x7317b434: "sol_log_data",
+    0xd56b5fe9: "sol_get_clock_sysvar",
+    0xbf7188f6: "sol_get_rent_sysvar",
+    0xedef5aee: "sol_remaining_compute_units",
 }
 
 
@@ -129,7 +130,7 @@ def detect_cpi_patterns(elf, start, end):
     for offset in range(start, end, 8):
         if b[offset] == 0x85 and b[offset + 1] == 0x00:
             uimm = struct.unpack_from("<I", b, offset + 4)[0]
-            if uimm in (0xd56b5fe9, 0xe4042040):
+            if uimm in (0xa22b9c85, 0xd7449092):
                 name = SYSCALL_NAMES.get(uimm, "?")
                 # Look backwards for setup pattern
                 setup_instrs = 0
@@ -193,7 +194,7 @@ def detect_serialization_patterns(elf, start, end):
             current_run = 0
         if b[offset] == 0x85 and b[offset + 1] == 0x00:
             uimm = struct.unpack_from("<I", b, offset + 4)[0]
-            if uimm == 0xa22b9c85:  # sol_memcpy_
+            if uimm == 0x717cc4a3:  # sol_memcpy_
                 memcpy_count += 1
 
     return {
