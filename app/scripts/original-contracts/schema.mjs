@@ -9,8 +9,39 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
   const pending = new Set();
   let primitiveWitnesses;
   const key = (id, name) => `${id}.${name}`;
+  function initialized(ctx, name, exported = false) {
+    if ((exported ? ctx.earlyExports : ctx.earlyLocals).has(name)) {
+      throw new Error(`uninitialized eager binding ${ctx.id}.${name}`);
+    }
+  }
+  function eagerReference(node, ctx) {
+    // Getter/function bodies execute later. Their lexical source position alone
+    // cannot determine when a captured declaration will be initialized.
+    if (ctx.deferred.some(([start, end]) => start <= node.start && node.end <= end)) return null;
+    let early = null;
+    walk(node, (read, parents) => {
+      if (early || parents.some(parent => /Function|Method/.test(parent.type))) return;
+      if (/Function|Method/.test(read.type)) return;
+      const parent = parents.at(-1);
+      if (read.type === 'Identifier' && ctx.locals.has(read.name)) {
+        if (parent?.type === 'MemberExpression' && parent.property === read && !parent.computed) return;
+        if (['ObjectProperty', 'ObjectMethod'].includes(parent?.type) && parent.key === read && !parent.computed) return;
+        if (read.start < ctx.locals.get(read.name).end) early = read.name;
+      }
+      if (read.type === 'MemberExpression' && !read.computed && read.object.type === 'Identifier' &&
+          read.object.name === ctx.output) {
+        const name = propertyName(read.property);
+        if (ctx.exports.has(name) && read.start < ctx.exports.get(name).end) early = name;
+      }
+    });
+    return early;
+  }
+  function eagerInitialized(node, ctx) {
+    const name = eagerReference(node, ctx);
+    if (name !== null) throw new Error(`uninitialized eager binding ${ctx.id}.${name}`);
+  }
   function importedId(node, ctx) {
-    if (node?.type === 'Identifier') return ctx.imports.get(node.name);
+    if (node?.type === 'Identifier') { initialized(ctx, node.name); return ctx.imports.get(node.name); }
     if (node?.type === 'CallExpression' && ['r', 'i'].some((method) => member(node.callee, ctx.factory.runtime, method)) &&
         node.arguments.length === 1 && node.arguments[0].type === 'NumericLiteral') return node.arguments[0].value;
     return undefined;
@@ -46,13 +77,18 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
         exports.set(name, node.right);
       }
     });
-    const result = { factory, id, locals, exports, imports, output };
+    const deferred = findNodes(factory.node.body, node => /Function|Method/.test(node.type)).map(node => [node.start, node.end]);
+    const result = { factory, id, locals, exports, imports, output, deferred,
+      earlyLocals: new Set(), earlyExports: new Set() };
+    for (const [name, value] of locals) if (eagerReference(value, result) !== null) result.earlyLocals.add(name);
+    for (const [name, value] of exports) if (eagerReference(value, result) !== null) result.earlyExports.add(name);
     modules.set(id, result);
     remember(factory, factory.node, `factory ${id}`);
     return result;
   }
   async function declaration(id, name) {
     const ctx = await context(id);
+    initialized(ctx, name, true);
     const node = ctx.exports.get(name);
     if (!node) throw new Error(`missing declaration: ${id}.${name}`);
     remember(ctx.factory, node, `declaration ${id}.${name}`);
@@ -99,13 +135,16 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
     if (node.type !== 'MemberExpression' || node.computed || node.object.type !== 'Identifier') return null;
     const name = propertyName(node.property);
     if (node.object.name === ctx.output) {
+      initialized(ctx, name, true);
       const value = ctx.exports.get(name);
       if (!value) throw new Error(`unknown export ${ctx.id}.${name}`);
       return { ctx, name, node: value };
     }
+    initialized(ctx, node.object.name);
     const id = ctx.imports.get(node.object.name);
     if (id === undefined) return null;
     const target = await context(id);
+    initialized(target, name, true);
     const value = target.exports.get(name);
     if (!value) throw new Error(`unknown imported declaration ${id}.${name}`);
     return { ctx: target, name, node: value };
@@ -123,6 +162,7 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
   }
   async function constant(node, ctx) {
     if (node.type === 'Identifier') {
+      initialized(ctx, node.name);
       if (!ctx.locals.has(node.name)) throw new Error(`unknown constant ${ctx.id}.${node.name}`);
       return constant(ctx.locals.get(node.name), ctx);
     }
@@ -161,7 +201,7 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
     return literal(node);
   }
   async function shape(node, ctx) {
-    if (node.type === 'Identifier') return shape(ctx.locals.get(node.name), ctx);
+    if (node.type === 'Identifier') { initialized(ctx, node.name); return shape(ctx.locals.get(node.name), ctx); }
     if (node?.type !== 'ObjectExpression') throw new Error(`unsupported object shape: ${node?.type}`);
     const properties = {};
     for (const property of node.properties) {
@@ -180,6 +220,7 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
   async function compileWith(node, ctx) {
     if (!node) throw new Error('missing schema expression');
     if (node.type === 'Identifier') {
+      initialized(ctx, node.name);
       const value = ctx.locals.get(node.name);
       if (!value) throw new Error(`unknown schema identifier ${ctx.id}.${node.name}`);
       return ref(ctx, node.name, value);
@@ -253,7 +294,9 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
     throw new Error(`unsupported schema method ${method} on ${expanded.type ?? '$ref/union'}`);
   }
   async function compile(node, factory) {
-    return compileWith(node, await context(factory.id));
+    const ctx = await context(factory.id);
+    eagerInitialized(node, ctx);
+    return compileWith(node, ctx);
   }
   async function schema(id, name) {
     const { node } = await declaration(id, name);
@@ -279,6 +322,10 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
     return result;
   }
   return { declaration, schema, compile, document,
-    constant: async (node, factory) => constant(node, await context(factory.id)),
+    constant: async (node, factory) => {
+      const ctx = await context(factory.id);
+      eagerInitialized(node, ctx);
+      return constant(node, ctx);
+    },
     witnesses: () => [...witnesses.values()] };
 }
