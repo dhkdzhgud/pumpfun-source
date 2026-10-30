@@ -18,6 +18,14 @@ import json
 
 import os
 import struct
+import codecs
+import gzip
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+
+
 import tempfile
 from pathlib import Path
 
@@ -121,6 +129,58 @@ from unittest.mock import patch
 import deep_section_analysis
 import deep_disassembly
 import analyze
+import check_sbf_backend_diagnostics as backend_diagnostics
+import test_sbf_backend_diagnostics as backend_cases
+from compare import compare
+
+
+class BackendLogSignatureTests(unittest.TestCase):
+    def setUp(self):
+        folder = analyze.ROOT / 'work'
+        folder.mkdir(exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix='backend-bom-', dir=folder)
+        self.path = Path(self.temporary.name) / 'build.log'
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_bom_errors_reject_in_plain_gzip_and_ansi_logs(self):
+        for compressed in (False, True):
+            for colored in (False, True):
+                with self.subTest(compressed=compressed, colored=colored):
+                    line = ('\x1b[31m' if colored else '') + backend_cases.ERROR + ('\x1b[0m' if colored else '')
+                    decoded = codecs.BOM_UTF8 + (line + '\nCargo exit: 0\nstrip exit: 0\n').encode('utf-8')
+                    raw = gzip.compress(decoded, mtime=0) if compressed else decoded
+                    self.path.write_bytes(raw)
+                    result = backend_diagnostics.check([self.path])
+                    self.assertFalse(result['diagnostic_gate_passed'])
+                    self.assertEqual(result['backend_error_count'], 1)
+                    record = result['logs'][0]
+                    self.assertEqual(record['backend_errors'][0]['kind'], 'stack_offset_exceeded')
+                    self.assertEqual(record['backend_errors'][0]['line_number'], 1)
+                    self.assertEqual(record['input_sha256'], hashlib.sha256(raw).hexdigest())
+                    self.assertEqual(record['decoded_sha256'], hashlib.sha256(decoded).hexdigest())
+                    self.assertEqual(self.path.read_bytes(), raw)
+
+    def test_clean_bom_log_still_makes_no_readiness_claim(self):
+        self.path.write_bytes(codecs.BOM_UTF8 + b'Finished release\n')
+        result = backend_diagnostics.check([self.path])
+        self.assertTrue(result['diagnostic_gate_passed'])
+        self.assertFalse(result['program_readiness_proven'])
+
+    def test_only_the_initial_signature_is_removed(self):
+        self.path.write_bytes(codecs.BOM_UTF8 + 'Error: internal \ufeff payload\n'.encode('utf-8'))
+        errors = backend_diagnostics.inspect(self.path)['backend_errors']
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]['text'], 'Error: internal \ufeff payload')
+
+    def test_actual_cli_rejects_a_bom_prefixed_error(self):
+        self.path.write_bytes(codecs.BOM_UTF8 + (backend_cases.ERROR + '\n').encode('utf-8'))
+        result = subprocess.run([sys.executable, backend_diagnostics.__file__, '--log', str(self.path)], capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(json.loads(result.stdout)['diagnostic_gate_passed'])
+
+
 import deep_disassembly
 from window_elf_reader import Elf
 
