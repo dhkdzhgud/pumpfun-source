@@ -180,7 +180,7 @@ def main():
             raise ValueError('source report changed during audit')
     except BaseException as error:
         if published:
-            error.add_note('Audit output was already published; retained at ' + str(args.output))
+            error.add_note('Audit output was already published; leaving output path untouched: ' + str(args.output))
         raise
     finally:
         if staged is not None:

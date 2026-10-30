@@ -113,6 +113,23 @@ class DiagnosticAuditPublicationTests(unittest.TestCase):
             self.assertTrue(any('already published' in note for note in caught.exception.__notes__))
             self.assertEqual(list(output.parent.glob('.audit.json.*')), [])
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX hard-link publication path')
+    def test_posix_postpublication_failure_preserves_concurrent_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report, output, _ = self.fixture(Path(temporary))
+            link = os.link
+            def publish_then_replace(source, destination):
+                link(source, destination)
+                output.unlink()
+                output.write_bytes(b'complete receipt from another writer')
+                report.write_bytes(b'changed after publication')
+            with mock.patch.object(gate.os, 'link', publish_then_replace), \
+                    mock.patch.object(sys, 'argv', ['audit', '--report', str(report), '--output', str(output)]):
+                with self.assertRaisesRegex(ValueError, 'source report changed during audit'):
+                    gate.main()
+            self.assertEqual(output.read_bytes(), b'complete receipt from another writer')
+            self.assertEqual(list(output.parent.glob('.audit.json.*')), [])
+
     def test_failed_staging_leaves_no_report_or_temporary_file(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
