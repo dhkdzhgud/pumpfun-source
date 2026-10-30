@@ -439,7 +439,8 @@ def recover_anchor_idl(elf):
                                           if ld["mem_offset"] == o), 0)
                                     for o in offsets[:20]
                                 ],
-                                "likely_struct_size": max(offsets[:20]) + 8 if offsets else 0,
+                                # Infer before the display-only cap on field details.
+                                "likely_struct_size": max(offsets) + 8 if offsets else 0,
                             })
 
     # Deduplicate account sizes
