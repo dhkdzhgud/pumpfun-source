@@ -127,21 +127,29 @@ def listing(elf, start, size, names=None):
 
 
 def normalized_tokens(rows):
-    """Instruction tokens with branch displacements replaced by relative block labels.
+    """Instruction tokens with labels bound to their destination instructions.
 
+    A label names both the edge and the instruction it reaches. Destinations
+    outside the decoded instruction boundaries keep their window-relative offset.
     Calls keep their absolute target (callee identity matters); lddw keeps its value.
     """
-    targets = sorted({r['target'] for r in rows if isinstance(r['target'], int)})
+    offsets = {r['off'] for r in rows}
+    targets = sorted({r['target'] for r in rows
+                      if isinstance(r['target'], int) and r['target'] in offsets})
     label = {t: f'L{i}' for i, t in enumerate(targets)}
     tokens = []
     for r in rows:
         f = r['fields']
         if isinstance(r['target'], int):
-            tokens.append(' '.join(map(str, f[:-1])) + ' ->' + label[r['target']])
+            destination = label.get(r['target'], f"offset({r['target']:#x})")
+            token = ' '.join(map(str, f[:-1])) + ' ->' + destination
         elif isinstance(r['target'], tuple):
-            tokens.append(f'call {r["target"][1]:#x}')
+            token = f'call {r["target"][1]:#x}'
         else:
-            tokens.append(' '.join(map(str, f)))
+            token = ' '.join(map(str, f))
+        if r['off'] in label:
+            token = label[r['off']] + ': ' + token
+        tokens.append(token)
     return tokens
 
 
