@@ -159,7 +159,12 @@ def main():
             os.fsync(stream.fileno())
         if args.report.read_bytes() != raw:
             raise ValueError('source report changed during audit')
-        os.link(staged, args.output)
+        if os.name == 'nt':
+            # Windows rename publishes atomically and refuses an existing
+            # destination, without requiring hard-link creation privileges.
+            os.rename(staged, args.output)
+        else:
+            os.link(staged, args.output)
         published = True
         if args.report.read_bytes() != raw:
             raise ValueError('source report changed during audit')
