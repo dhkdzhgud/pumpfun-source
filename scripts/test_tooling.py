@@ -186,6 +186,9 @@ class BackendLogSignatureTests(unittest.TestCase):
 
 
 import deep_disassembly
+from window_elf_reader import Elf
+
+
 import bytecode_signatures
 from compare import compare
 
@@ -767,6 +770,43 @@ class ComparisonTests(unittest.TestCase):
     def test_truncated_padding(self): self.assertFalse(compare(b'abc\0\0',b'abc\0')['full_byte_equality'])
     def test_extended_padding(self): self.assertFalse(compare(b'abc\0',b'abc\0\0')['full_byte_equality'])
     def test_empty(self): self.assertEqual(compare(b'a',b'')['first_difference'],0)
+
+
+class NegationDecodeTests(unittest.TestCase):
+    def test_negation_has_only_a_destination_operand(self):
+        for opcode, mnemonic in ((0x84, 'neg32'), (0x87, 'neg64')):
+            for register in (0, 3, 10):
+                with self.subTest(opcode=opcode, register=register):
+                    raw = struct.pack('<BBhi', opcode, register, 0, 0)
+                    result, size = deep_disassembly.decode_instruction(raw, 0, None)
+                    self.assertEqual(result['mnemonic'], f'{mnemonic} r{register}')
+                    self.assertEqual(result['hex'], raw.hex())
+                    self.assertEqual(result['imm'], 0)
+                    self.assertEqual(size, 8)
+
+    def test_binary_alu_operands_are_unchanged(self):
+        for raw, expected in (
+            (struct.pack('<BBhi', 0x07, 3, 0, -2), 'add64 r3, -2'),
+            (struct.pack('<BBhi', 0x0f, 0x23, 0, 0), 'add64 r3, r2'),
+            (struct.pack('<BBhi', 0x17, 3, 0, 0), 'sub64 r3, 0'),
+        ):
+            self.assertEqual(deep_disassembly.decode_instruction(raw, 0, None)[0]['mnemonic'], expected)
+
+    def test_captured_negations_have_no_invented_immediate(self):
+        expected_counts = {'pump': 25, 'pump_amm': 24, 'pump_fees': 16, 'mayhem': 30}
+        for name, expected_count in expected_counts.items():
+            elf = Elf(analyze.ROOT / 'evidence/original' / name / 'deployed.so')
+            count = 0
+            offset = elf.lo
+            while offset < elf.hi:
+                opcode = elf.b[offset]
+                if opcode in (0x84, 0x87):
+                    result, size = deep_disassembly.decode_instruction(elf.b, offset, elf)
+                    self.assertEqual(result['mnemonic'], f"neg{32 if opcode == 0x84 else 64} r{elf.b[offset + 1] & 15}")
+                    self.assertEqual(size, 8)
+                    count += 1
+                offset += 16 if opcode == 0x18 else 8
+            self.assertEqual(count, expected_count, name)
 
 
 class EvidenceCheckOptimizeTests(unittest.TestCase):
