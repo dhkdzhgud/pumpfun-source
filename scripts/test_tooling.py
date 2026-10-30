@@ -1,5 +1,35 @@
 #!/usr/bin/env python3
 """Mutation tests ensuring the byte comparator cannot hide code/padding changes."""
+import hashlib
+import io
+import json
+import os
+import struct
+import sys
+import tarfile
+import tempfile
+from pathlib import Path
+
+
+import contextlib
+import io
+import json
+
+
+import os
+import struct
+import codecs
+import gzip
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+
+
+import tempfile
+from pathlib import Path
+
+
 import contextlib
 import io
 import json
@@ -16,6 +46,10 @@ import sys
 import tempfile
 import unittest
 from window_elf_reader import Elf
+
+
+from amm_sell.test_best_version import BestScoreVersionTests
+from amm_sell.test_sell_distance import AlignmentDistanceTests
 
 
 from amm_sell.test_cached_status import CachedAttemptStatusTests
@@ -102,6 +136,205 @@ from unittest.mock import patch
 import deep_section_analysis
 import deep_disassembly
 import analyze
+from window_elf_reader import Elf
+from compare import compare
+
+
+class MathDensityOrderTests(unittest.TestCase):
+    def analyze(self, windows):
+        data = bytearray()
+        entries = []
+        for opcodes in windows:
+            entries.append(len(data))
+            data.extend(b''.join(struct.pack('<BBhi', opcode, 0, 0, 0) for opcode in opcodes))
+        return deep_section_analysis.analyze_math_patterns(SimpleNamespace(b=bytes(data), entries=entries, hi=len(data), funcs=[]))
+
+    def test_addition_heavy_window_ranks_by_density(self):
+        report = self.analyze([[0x27, 0x37, *([0x07] * 3), *([0x95] * 15)], [0x07] * 5])
+        rows = report['math_intensive_windows']
+        self.assertEqual([row['arithmetic_density'] for row in rows], [1.0, 0.25])
+        self.assertEqual([row['address'] for row in rows], ['0xa0', '0x0'])
+        self.assertEqual(report['total_math_windows'], 2)
+        self.assertEqual(sum(row['additions'] for row in rows), 8)
+
+    def test_equal_density_preserves_entry_order(self):
+        rows = self.analyze([[0x07] * 5, [0x07] * 10])['math_intensive_windows']
+        self.assertEqual([row['address'] for row in rows], ['0x0', '0x28'])
+        self.assertEqual([row['arithmetic_density'] for row in rows], [1.0, 1.0])
+
+    def test_real_captured_math_windows_are_density_ordered(self):
+        for name in ('pump', 'pump_amm', 'pump_fees', 'mayhem'):
+            with self.subTest(program=name):
+                elf = Elf(analyze.ROOT / 'evidence/original' / name / 'deployed.so')
+                rows = deep_section_analysis.analyze_math_patterns(elf)['math_intensive_windows']
+                densities = [row['arithmetic_density'] for row in rows]
+                self.assertEqual(densities, sorted(densities, reverse=True))
+
+
+import deep_disassembly
+from compare import compare
+
+
+class StackAddressOperandTests(unittest.TestCase):
+    def analyze(self, *instructions):
+        raw = b''.join(struct.pack('<BBhi', *instruction) for instruction in instructions)
+        decoded = []
+        for offset in range(0, len(raw), 8):
+            decoded.append(deep_disassembly.decode_instruction(raw, offset, None)[0])
+        return deep_disassembly.analyze_stack_frame(decoded)
+
+    def test_storing_frame_pointer_value_is_not_a_stack_address(self):
+        # stxdw [r1-64], r10: r1 is the address; r10 is only the stored value.
+        result = self.analyze((0x7b, 0xa1, -64, 0))
+        self.assertEqual(result, {'max_stack_depth': 0, 'stack_slots': 0, 'most_accessed_offsets': []})
+
+    def test_frame_pointer_as_both_base_and_value_counts_once(self):
+        result = self.analyze((0x7b, 0xaa, -16, 0))
+        self.assertEqual(result['max_stack_depth'], 16)
+        self.assertEqual(result['most_accessed_offsets'], [{'offset': -16, 'count': 1}])
+
+    def test_load_and_store_address_bases_keep_real_stack_accesses(self):
+        result = self.analyze(
+            (0x79, 0xa2, -24, 0),  # ldxdw r2, [r10-24]
+            (0x7b, 0x2a, -24, 0),  # stxdw [r10-24], r2
+            (0x7a, 0x0a, -8, 5),  # stdw [r10-8], 5
+        )
+        self.assertEqual(result['max_stack_depth'], 24)
+        self.assertEqual(result['stack_slots'], 2)
+        self.assertEqual(result['most_accessed_offsets'], [{'offset': -24, 'count': 2}, {'offset': -8, 'count': 1}])
+
+    def test_nonmemory_frame_pointer_operand_does_not_count(self):
+        self.assertEqual(self.analyze((0xbf, 0xa1, 0, 0))['stack_slots'], 0)
+
+
+import bytecode_signatures
+from window_elf_reader import Elf
+
+
+import check_sbf_backend_diagnostics as backend_diagnostics
+import test_sbf_backend_diagnostics as backend_cases
+from compare import compare
+
+
+class BackendLogSignatureTests(unittest.TestCase):
+    def setUp(self):
+        folder = analyze.ROOT / 'work'
+        folder.mkdir(exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix='backend-bom-', dir=folder)
+        self.path = Path(self.temporary.name) / 'build.log'
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def test_bom_errors_reject_in_plain_gzip_and_ansi_logs(self):
+        for compressed in (False, True):
+            for colored in (False, True):
+                with self.subTest(compressed=compressed, colored=colored):
+                    line = ('\x1b[31m' if colored else '') + backend_cases.ERROR + ('\x1b[0m' if colored else '')
+                    decoded = codecs.BOM_UTF8 + (line + '\nCargo exit: 0\nstrip exit: 0\n').encode('utf-8')
+                    raw = gzip.compress(decoded, mtime=0) if compressed else decoded
+                    self.path.write_bytes(raw)
+                    result = backend_diagnostics.check([self.path])
+                    self.assertFalse(result['diagnostic_gate_passed'])
+                    self.assertEqual(result['backend_error_count'], 1)
+                    record = result['logs'][0]
+                    self.assertEqual(record['backend_errors'][0]['kind'], 'stack_offset_exceeded')
+                    self.assertEqual(record['backend_errors'][0]['line_number'], 1)
+                    self.assertEqual(record['input_sha256'], hashlib.sha256(raw).hexdigest())
+                    self.assertEqual(record['decoded_sha256'], hashlib.sha256(decoded).hexdigest())
+                    self.assertEqual(self.path.read_bytes(), raw)
+
+    def test_clean_bom_log_still_makes_no_readiness_claim(self):
+        self.path.write_bytes(codecs.BOM_UTF8 + b'Finished release\n')
+        result = backend_diagnostics.check([self.path])
+        self.assertTrue(result['diagnostic_gate_passed'])
+        self.assertFalse(result['program_readiness_proven'])
+
+    def test_only_the_initial_signature_is_removed(self):
+        self.path.write_bytes(codecs.BOM_UTF8 + 'Error: internal \ufeff payload\n'.encode('utf-8'))
+        errors = backend_diagnostics.inspect(self.path)['backend_errors']
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]['text'], 'Error: internal \ufeff payload')
+
+    def test_actual_cli_rejects_a_bom_prefixed_error(self):
+        self.path.write_bytes(codecs.BOM_UTF8 + (backend_cases.ERROR + '\n').encode('utf-8'))
+        result = subprocess.run([sys.executable, backend_diagnostics.__file__, '--log', str(self.path)], capture_output=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(json.loads(result.stdout)['diagnostic_gate_passed'])
+
+
+import deep_disassembly
+from window_elf_reader import Elf
+
+
+import bytecode_signatures
+from compare import compare
+
+
+def symbol_hash(name):
+    """Independent seed-zero MurmurHash3 x86_32 reference for table checks.
+
+    SBPF ebpf::hash_symbol_name uses hash32::Murmur3Hasher::default().
+    Reference: aappleby/smhasher, MurmurHash3.cpp, MurmurHash3_x86_32.
+    """
+    data = name.encode('utf-8')
+    mask = 0xffffffff
+    def rotate(n, bits):
+        return ((n << bits) | (n >> (32 - bits))) & mask
+    def mix(k):
+        return (rotate((k * 0xcc9e2d51) & mask, 15) * 0x1b873593) & mask
+    h = 0
+    complete = len(data) // 4 * 4
+    for at in range(0, complete, 4):
+        h ^= mix(int.from_bytes(data[at:at+4], 'little'))
+        h = (rotate(h, 13) * 5 + 0xe6546b64) & mask
+    if complete != len(data):
+        h ^= mix(int.from_bytes(data[complete:], 'little'))
+    h ^= len(data)
+    h ^= h >> 16
+    h = h * 0x85ebca6b & mask
+    h ^= h >> 13
+    h = h * 0xc2b2ae35 & mask
+    return h ^ (h >> 16)
+
+
+class SyscallHashTests(unittest.TestCase):
+    def test_reference_vectors(self):
+        self.assertEqual(symbol_hash(''), 0)
+        self.assertEqual(symbol_hash('foo'), 0xf6a5c420)
+        self.assertEqual(symbol_hash('sol_log_'), 0x207559bd)
+
+    def test_each_table_key_is_the_hash_of_its_symbol(self):
+        for module in (deep_disassembly, bytecode_signatures, deep_section_analysis):
+            for value, name in module.SYSCALL_NAMES.items():
+                with self.subTest(module=module.__name__, symbol=name):
+                    self.assertEqual(value, symbol_hash(name))
+
+    def test_literal_calls_decode_and_fingerprint_the_hashed_name(self):
+        for name in deep_disassembly.SYSCALL_NAMES.values():
+            with self.subTest(symbol=name):
+                raw = struct.pack('<BBhI', 0x85, 0, 0, symbol_hash(name))
+                result, size = deep_disassembly.decode_instruction(raw, 0, None)
+                self.assertEqual(result['syscall'], name)
+                self.assertEqual(size, 8)
+                self.assertEqual(deep_disassembly.fingerprint_window(SimpleNamespace(b=raw, secs={}), 0, 8)['syscall_sequence'], [name])
+
+    def test_cpi_and_memcpy_selectors_use_the_same_hash_rule(self):
+        cpi = b''.join(struct.pack('<BBhI', 0x85, 0, 0, symbol_hash(name))
+                       for name in ('sol_invoke_signed_c', 'sol_invoke_signed_rust'))
+        patterns = bytecode_signatures.detect_cpi_patterns(SimpleNamespace(b=cpi), 0, len(cpi))
+        self.assertEqual([p['syscall'] for p in patterns], ['sol_invoke_signed_c', 'sol_invoke_signed_rust'])
+        memcpy = struct.pack('<BBhI', 0x85, 0, 0, symbol_hash('sol_memcpy_'))
+        self.assertEqual(bytecode_signatures.detect_serialization_patterns(SimpleNamespace(b=memcpy), 0, 8)['memcpy_calls'], 1)
+        clock = struct.pack('<BBhI', 0x85, 0, 0, symbol_hash('sol_get_clock_sysvar'))
+        self.assertEqual(bytecode_signatures.detect_cpi_patterns(SimpleNamespace(b=clock), 0, 8), [])
+        self.assertEqual(bytecode_signatures.detect_serialization_patterns(SimpleNamespace(b=cpi), 0, len(cpi))['memcpy_calls'], 0)
+
+    def test_unknown_hash_keeps_the_existing_fallback(self):
+        raw = struct.pack('<BBhI', 0x85, 0, 0, 0x12345678)
+        self.assertEqual(deep_disassembly.decode_instruction(raw, 0, None)[0]['syscall'], 'syscall_0x12345678')
+
+
 import analyze_program
 import deep_disassembly
 from window_elf_reader import Elf
@@ -152,6 +385,12 @@ class InferredStructExtentTests(unittest.TestCase):
         self.assertGreater(capped, 0)
 
 
+
+
+import verify_evidence
+
+
+from source_manifest_guard import strict_manifest
 
 
 class DiagnosticOutputPreservationTests(unittest.TestCase):
@@ -659,6 +898,104 @@ class ComparisonTests(unittest.TestCase):
     def test_empty(self): self.assertEqual(compare(b'a',b'')['first_difference'],0)
 
 
+class SerializationBoundaryTests(unittest.TestCase):
+    def detect(self, opcodes):
+        raw = b''.join(struct.pack('<BBhi', opcode, 0, 0, 0) for opcode in opcodes)
+        return bytecode_signatures.detect_serialization_patterns(SimpleNamespace(b=raw), 0, len(raw))
+
+    def test_terminal_store_run_meets_the_existing_threshold(self):
+        result = self.detect([0x63, 0x6b, 0x73, 0x7b])
+        self.assertEqual(result['sequential_stores'], 4)
+        self.assertEqual(result['max_store_run'], 4)
+        self.assertTrue(result['likely_serialization'])
+
+    def test_short_and_interrupted_runs_do_not_meet_threshold(self):
+        for opcodes in ([0x63] * 3, [0x63, 0x63, 0xb7, 0x63, 0x63], []):
+            with self.subTest(opcodes=opcodes):
+                self.assertFalse(self.detect(opcodes)['likely_serialization'])
+
+    def test_classification_does_not_depend_on_a_trailing_exit(self):
+        for opcodes in ([0x63] * 4, [0x63] * 5, [0x63] * 2 + [0xb7] + [0x63] * 4):
+            with self.subTest(opcodes=opcodes):
+                self.assertEqual(self.detect(opcodes), self.detect([*opcodes, 0x95]))
+
+    def test_retained_four_store_ranges(self):
+        ranges = {'pump': 0x1788, 'pump_amm': 0xe50, 'pump_fees': 0x1bf0, 'mayhem': 0x5720}
+        for name, start in ranges.items():
+            with self.subTest(program=name):
+                elf = Elf(analyze.ROOT / 'evidence/original' / name / 'deployed.so')
+                self.assertTrue(all(elf.b[at] in (0x63, 0x6b, 0x73, 0x7b) for at in range(start, start + 32, 8)))
+                result = bytecode_signatures.detect_serialization_patterns(elf, start, start + 32)
+                self.assertEqual(result['max_store_run'], 4)
+                self.assertTrue(result['likely_serialization'])
+
+
+class PatternTailScanTests(unittest.TestCase):
+    def test_error_branch_in_last_instruction_is_scanned(self):
+        raw = struct.pack('<BBhi', 0xb7, 0, 0, 6000) + struct.pack('<BBhi', 0x15, 0, -2, 0)
+        result = bytecode_signatures.detect_error_patterns(SimpleNamespace(b=raw), 0, len(raw))
+        self.assertEqual(result, [{'offset': 8, 'branch_target_offset': 0, 'error_code': 6000, 'type': 'conditional_error'}])
+
+    def test_account_pair_uses_only_its_two_instruction_extent(self):
+        raw = struct.pack('<BBhi', 0x79, 1, 0, 0) + struct.pack('<BBhi', 0x55, 1, 0, 8)
+        result = bytecode_signatures.detect_account_validation(SimpleNamespace(b=raw), 0, len(raw))
+        self.assertEqual(result['discriminator_checks'], 1)
+        self.assertTrue(result['likely_account_validation'])
+
+    def test_single_owner_field_load_is_included(self):
+        raw = struct.pack('<BBhi', 0x79, 1, 32, 0)
+        result = bytecode_signatures.detect_account_validation(SimpleNamespace(b=raw), 0, len(raw))
+        self.assertEqual(result['owner_field_accesses'], 1)
+        self.assertFalse(result['likely_account_validation'])
+
+    def test_empty_ranges_are_empty(self):
+        elf = SimpleNamespace(b=b'')
+        self.assertEqual(bytecode_signatures.detect_error_patterns(elf, 0, 0), [])
+        self.assertEqual(bytecode_signatures.detect_account_validation(elf, 0, 0)['owner_field_accesses'], 0)
+
+    def test_retained_pump_terminal_branch(self):
+        elf = Elf(analyze.ROOT / 'evidence/original/pump/deployed.so')
+        result = bytecode_signatures.detect_error_patterns(elf, 0xef40, 0xefc8)
+        self.assertIn({'offset': 120, 'branch_target_offset': 24, 'error_code': 0, 'type': 'conditional_error'}, result)
+
+
+class NegationDecodeTests(unittest.TestCase):
+    def test_negation_has_only_a_destination_operand(self):
+        for opcode, mnemonic in ((0x84, 'neg32'), (0x87, 'neg64')):
+            for register in (0, 3, 10):
+                with self.subTest(opcode=opcode, register=register):
+                    raw = struct.pack('<BBhi', opcode, register, 0, 0)
+                    result, size = deep_disassembly.decode_instruction(raw, 0, None)
+                    self.assertEqual(result['mnemonic'], f'{mnemonic} r{register}')
+                    self.assertEqual(result['hex'], raw.hex())
+                    self.assertEqual(result['imm'], 0)
+                    self.assertEqual(size, 8)
+
+    def test_binary_alu_operands_are_unchanged(self):
+        for raw, expected in (
+            (struct.pack('<BBhi', 0x07, 3, 0, -2), 'add64 r3, -2'),
+            (struct.pack('<BBhi', 0x0f, 0x23, 0, 0), 'add64 r3, r2'),
+            (struct.pack('<BBhi', 0x17, 3, 0, 0), 'sub64 r3, 0'),
+        ):
+            self.assertEqual(deep_disassembly.decode_instruction(raw, 0, None)[0]['mnemonic'], expected)
+
+    def test_captured_negations_have_no_invented_immediate(self):
+        expected_counts = {'pump': 25, 'pump_amm': 24, 'pump_fees': 16, 'mayhem': 30}
+        for name, expected_count in expected_counts.items():
+            elf = Elf(analyze.ROOT / 'evidence/original' / name / 'deployed.so')
+            count = 0
+            offset = elf.lo
+            while offset < elf.hi:
+                opcode = elf.b[offset]
+                if opcode in (0x84, 0x87):
+                    result, size = deep_disassembly.decode_instruction(elf.b, offset, elf)
+                    self.assertEqual(result['mnemonic'], f"neg{32 if opcode == 0x84 else 64} r{elf.b[offset + 1] & 15}")
+                    self.assertEqual(size, 8)
+                    count += 1
+                offset += 16 if opcode == 0x18 else 8
+            self.assertEqual(count, expected_count, name)
+
+
 class EvidenceCheckOptimizeTests(unittest.TestCase):
     def test_check_survives_python_optimize(self):
         # `python -O` strips `assert`; verify_evidence must still fail closed.
@@ -686,7 +1023,7 @@ class SyscallFingerprintTests(unittest.TestCase):
                   '.rel.dyn': (0, 9, 0, 0, len(code)+len(dynsym), len(rel), 0, 0, 8, 16)})
         fp = deep_disassembly.fingerprint_window(elf, 0, len(code))
         self.assertEqual(fp['syscall_sequence'],
-                         ['sol_log_64_', 'abort', 'unknown_0x12345678', 'abort'])
+                         ['sol_log_', 'abort', 'unknown_0x12345678', 'abort'])
         self.assertEqual(fp['opcode_count'], 7)
 
     def test_missing_invalid_and_noncall_relocations(self):
@@ -711,7 +1048,7 @@ class SyscallFingerprintTests(unittest.TestCase):
                 elf = SimpleNamespace(b=code, secs=sections, symbols={},
                                       relocations={0: {'type': 10, 'symbol': 'unresolved'}})
                 self.assertEqual(deep_disassembly.fingerprint_window(
-                    elf, 0, len(code))['syscall_sequence'], ['sol_log_64_'])
+                    elf, 0, len(code))['syscall_sequence'], ['sol_log_'])
 
     def test_captured_import_sequences(self):
         for name, count in (('pump', 269), ('pump_amm', 173),
@@ -764,7 +1101,7 @@ class InternalCallDecodeTests(unittest.TestCase):
         blob = struct.pack('<BBhI', 0x85, 0, 0, 0x207559bd)
         elf = SimpleNamespace(funcs=[], relocations={})
         record, _ = deep_disassembly.decode_instruction(blob, 0, elf)
-        self.assertEqual(record['syscall'], 'sol_log_64_')
+        self.assertEqual(record['syscall'], 'sol_log_')
         self.assertNotIn('call_target', record)
 
     def test_captured_call_targets_match_window_reader(self):
@@ -1052,6 +1389,149 @@ class InstructionLogNameTests(unittest.TestCase):
         self.assertEqual(len(names), 25)
         self.assertIn('Buy', names)
         self.assertIn('InitializeGlobalParams', names)
+
+
+@unittest.skipUnless(sys.version_info >= (3, 11), 'pump_dependency_cache needs tomllib')
+class DependencyCacheArchiveTests(unittest.TestCase):
+    def import_seed(self, extra=None):
+        import pump_dependency_cache as m
+        sha = lambda p: hashlib.sha256(Path(p).read_bytes()).hexdigest()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            crate = root / 'repo/prog'
+            crate.mkdir(parents=True)
+            (crate / 'Cargo.toml').write_text('[package]\nname="prog"\nversion="0.1.0"\n[workspace]\n')
+            files = {'Cargo.toml': b'[package]\nname="dep"\nversion="1.0.0"\n', 'src/lib.rs': b'pub fn f() {}\n'}
+            data = io.BytesIO()
+            with tarfile.open(fileobj=data, mode='w:gz') as tar:
+                for name, body in files.items():
+                    info = tarfile.TarInfo('dep-1.0.0/' + name)
+                    info.size = len(body)
+                    tar.addfile(info, io.BytesIO(body))
+            home = root / 'cargo'
+            namespace = 'index.crates.io-1949cf8c6b5b557f'
+            archive = home / 'registry/cache' / namespace / 'dep-1.0.0.crate'
+            archive.parent.mkdir(parents=True)
+            archive.write_bytes(data.getvalue())
+            (crate / 'Cargo.lock').write_text(
+                'version = 3\n[[package]]\nname="dep"\nversion="1.0.0"\nchecksum="%s"\n'
+                '[[package]]\nname="prog"\nversion="0.1.0"\n' % sha(archive))
+            source = home / 'registry/src' / namespace / 'dep-1.0.0'
+            for name, body in {**files, '.cargo-ok': b'{"v":1}', **({extra: b'fn main() {}\n'} if extra and extra != 'linked' else {})}.items():
+                (source / name).parent.mkdir(parents=True, exist_ok=True)
+                (source / name).write_bytes(body)
+            if extra == 'linked':
+                os.symlink(source / 'src', source / 'linked')
+            build = root / 'build'
+            (build / 'target/release/deps').mkdir(parents=True)
+            (build / 'target/release/deps/libdep-0123456789abcdef.rlib').write_bytes(b'rlib')
+            for name in ['candidate.so', 'unstripped.so']:
+                (build / name).write_bytes(name.encode())
+            wrapper = root / 'wrapper'
+            wrapper.write_text('w')
+            (build / 'build-comparison.json').write_text(json.dumps({
+                'returncode': 0, 'source_unchanged': True, 'source_sha256': {},
+                'comparison': {'candidate_sha256': sha(build / 'candidate.so')},
+                'unstripped_sha256': sha(build / 'unstripped.so'),
+                'tool_sha256': {'rustc': 'r', 'cargo': 'c'}, 'source_wrapper_sha256': sha(wrapper),
+                'environment': {'CARGO_HOME': str(home)},
+                'command': ['cargo', '--manifest-path', str(crate / 'Cargo.toml')]}))
+            cache = object.__new__(m.DependencyCache)
+            cache.repo, cache.crate, cache.workspace, cache.direct = root / 'repo', crate, crate, False
+            cache.env = {'CARGO_HOME': str(home)}
+            cache.target = 'sbf-solana-solana'
+            cache.target_flags_key = 'CARGO_TARGET_SBF_SOLANA_SOLANA_RUSTFLAGS'
+            cache.tools = {'rust/bin/rustc': 'r', 'rust/bin/cargo': 'c'}
+            cache.sources = {str(source): m.tree(source)}
+            cache.packages = cache.crates = {'dep'}
+            cache.main_names = {'prog'}
+            cache.context = {'wrapper_sha256': sha(wrapper), 'external_sources': cache.sources}
+            cache.root, cache.key, cache.record = root / 'cache', 'k', {}
+            cache.entry = cache.root / 'k'
+            try:
+                cache.import_clean_build(build)
+            finally:
+                published = cache.entry.exists()
+            return cache.record, published
+
+    def test_locked_source_tree_is_imported(self):
+        record, published = self.import_seed()
+        self.assertEqual(record['imported_clean_build']['archive_files_verified'], 2)
+        self.assertTrue(published)
+
+    def test_files_absent_from_locked_archive_are_rejected(self):
+        for extra in ['build.rs', 'src/evil.rs', 'linked']:
+            with self.subTest(extra=extra), self.assertRaisesRegex(AssertionError, 'absent from locked archive'):
+                self.import_seed(extra)
+
+
+class ProgramDataPdaTests(unittest.TestCase):
+    def record(self, name):
+        return json.loads((analyze.ROOT / 'evidence' / name / 'capture.json').read_text())
+
+    def test_upgradeable_captures_bind_to_loader_pda(self):
+        for f in sorted((analyze.ROOT / 'evidence').glob('**/capture.json')):
+            m = json.loads(f.read_text())
+            if m.get('loader') != 'legacy-v2':
+                verify_evidence.check_programdata_pda(m)
+
+    def test_other_programs_bytes_under_this_program_id_are_rejected(self):
+        m = self.record('original/pump')
+        m['programdata'] = self.record('original/pump_amm')['programdata']
+        with self.assertRaises(AssertionError):
+            verify_evidence.check_programdata_pda(m)
+
+    def test_gate_checks_every_upgradeable_capture(self):
+        seen = []
+        check = verify_evidence.check_programdata_pda
+        verify_evidence.check_programdata_pda = lambda m: (seen.append(m['program']), check(m))
+        self.addCleanup(setattr, verify_evidence, 'check_programdata_pda', check)
+        with contextlib.redirect_stdout(io.StringIO()):
+            verify_evidence.main()
+        self.assertEqual(len(seen), 8)
+
+
+class SourceManifestLinkedDirectoryTests(unittest.TestCase):
+    def crate(self, root):
+        root = root.resolve()
+        crate = root / 'repo/crate'
+        crate.mkdir(parents=True)
+        (crate / 'Cargo.toml').write_text('[package]\nname = "probe"\n')
+        outside = root / 'outside'
+        outside.mkdir()
+        (outside / 'lib.rs').write_text('pub fn external() {}\n')
+        return crate, outside
+
+    def test_plain_source_directory_is_accepted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            crate, _ = self.crate(Path(temporary))
+            (crate / 'src').mkdir()
+            (crate / 'src/lib.rs').write_text('pub fn local() {}\n')
+            self.assertEqual(set(strict_manifest(crate, crate, crate.parent)), {'crate/Cargo.toml', 'crate/src/lib.rs'})
+
+    def test_symlinked_source_directory_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            crate, outside = self.crate(Path(temporary))
+            os.symlink(outside, crate / 'src')
+            with self.assertRaisesRegex(ValueError, 'symlinked directory'):
+                strict_manifest(crate, crate, crate.parent)
+
+    def test_symlinked_directory_named_target_below_the_crate_root_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            crate, outside = self.crate(Path(temporary))
+            (crate / 'src').mkdir()
+            os.symlink(outside, crate / 'src/target')
+            with self.assertRaisesRegex(ValueError, 'symlinked directory'):
+                strict_manifest(crate, crate, crate.parent)
+
+    def test_symlinked_directory_in_extra_input_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            crate, outside = self.crate(Path(temporary))
+            assets = crate.parent / 'assets'
+            assets.mkdir()
+            os.symlink(outside, assets / 'tables')
+            with self.assertRaisesRegex(ValueError, 'symlinked directory'):
+                strict_manifest(crate, crate, crate.parent, [assets])
 
 
 class RelocatedCallTargetTests(unittest.TestCase):
