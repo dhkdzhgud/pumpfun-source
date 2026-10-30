@@ -1,3 +1,4 @@
+import { parseExpression } from '@babel/parser';
 import { walk, member, propertyName, literal, findNodes, exactlyOne } from './source.mjs';
 
 // This reads a bounded declaration language. It never invokes a captured
@@ -15,7 +16,41 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
         node.arguments.length === 1 && node.arguments[0].type === 'NumericLiteral') return node.arguments[0].value;
     return undefined;
   }
+  const syntax = new Map();
+  const metadata = new Set(['start', 'end', 'loc', 'extra', 'errors', 'comments', 'leadingComments', 'innerComments', 'trailingComments']);
+  function astContent(value) {
+    if (value === null) return 'null';
+    if (Array.isArray(value)) return '[' + value.map(astContent).join(',') + ']';
+    if (typeof value === 'object') return '{' + Object.keys(value).filter(key => !metadata.has(key)).sort()
+      .map(key => JSON.stringify(key) + ':' + astContent(value[key])).join(',') + '}';
+    // Preserve primitive types, non-finite values and negative zero without
+    // letting JSON serialization collapse distinct AST values to null.
+    if (typeof value === 'number') return 'number:' + (Object.is(value, -0) ? '-0' : String(value));
+    return typeof value + ':' + JSON.stringify(value);
+  }
+  function sourceContent(factory, node) {
+    if (!Number.isSafeInteger(node.start) || !Number.isSafeInteger(node.end) ||
+        node.start < factory.node.start || node.end > factory.node.end || node.end <= node.start) {
+      throw new Error('AST differs from source: invalid factory range');
+    }
+    const identity = `${factory.provenance.sourceSha256}:${factory.node.start}:${factory.node.end}`;
+    if (!syntax.has(identity)) {
+      // Reparse original source privately. The caller-visible AST may have been
+      // cloned or mutated; source positions alone do not bind its values.
+      const parsed = parseExpression(factory.text(), { sourceType: 'module' });
+      const nodes = new Map();
+      walk(parsed, child => nodes.set(`${child.type}:${child.start}:${child.end}`, child));
+      syntax.set(identity, { nodes, fingerprints: new Map() });
+    }
+    const entry = syntax.get(identity);
+    const key = `${node.type}:${node.start - factory.node.start}:${node.end - factory.node.start}`;
+    const original = entry.nodes.get(key);
+    if (!original) throw new Error('AST differs from source: no matching source node');
+    if (!entry.fingerprints.has(key)) entry.fingerprints.set(key, astContent(original));
+    if (astContent(node) !== entry.fingerprints.get(key)) throw new Error('AST differs from source content');
+  }
   function remember(factory, node, label) {
+    sourceContent(factory, node);
     const record = factory.witness(node, label);
     witnesses.set(`${record.source}:${record.utf16.join(':')}`, record);
   }
@@ -47,8 +82,8 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
       }
     });
     const result = { factory, id, locals, exports, imports, output };
-    modules.set(id, result);
     remember(factory, factory.node, `factory ${id}`);
+    modules.set(id, result);
     return result;
   }
   async function declaration(id, name) {
@@ -87,9 +122,9 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
   async function ref(ctx, name, node, isExport = false) {
     const label = key(ctx.id, isExport ? name : `local:${name}`);
     if (!(label in definitions)) {
+      remember(ctx.factory, node, `schema ${label}`);
       definitions[label] = {};
       pending.add(label);
-      remember(ctx.factory, node, `schema ${label}`);
       definitions[label] = await compileWith(node, ctx);
       pending.delete(label);
     }
@@ -253,7 +288,10 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
     throw new Error(`unsupported schema method ${method} on ${expanded.type ?? '$ref/union'}`);
   }
   async function compile(node, factory) {
-    return compileWith(node, await context(factory.id));
+    const ctx = await context(factory.id);
+    const result = await compileWith(node, ctx);
+    sourceContent(ctx.factory, node);
+    return result;
   }
   async function schema(id, name) {
     const { node } = await declaration(id, name);
@@ -279,6 +317,11 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
     return result;
   }
   return { declaration, schema, compile, document,
-    constant: async (node, factory) => constant(node, await context(factory.id)),
+    constant: async (node, factory) => {
+      const ctx = await context(factory.id);
+      const result = await constant(node, ctx);
+      sourceContent(ctx.factory, node);
+      return result;
+    },
     witnesses: () => [...witnesses.values()] };
 }
