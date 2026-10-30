@@ -3,7 +3,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
-import {openCorpus, objectProperty, findNodes} from '../scripts/original-contracts/source.mjs';
+import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
+import path from 'node:path';
+import {openCorpus, objectProperty, findNodes, sha256, RANGE_ENCODING} from '../scripts/original-contracts/source.mjs';
 import {createSchemaExtractor} from '../scripts/original-contracts/schema.mjs';
 
 const corpus = await openCorpus(fileURLToPath(new URL('..', import.meta.url)));
@@ -52,4 +54,31 @@ test('unchanged clones and literal recovery retain source semantics', async () =
   const {extractor, factory, query} = await input();
   assert.deepEqual(await extractor.compile(structuredClone(query), factory), await extractor.compile(query, factory));
   assert.equal(await extractor.constant(structuredClone(maximum(query)), factory), 200);
+});
+
+test('content binding preserves the authenticated source grammar', async t => {
+  const parent = path.resolve(fileURLToPath(new URL('../..', import.meta.url)), 'work');
+  await mkdir(parent, {recursive:true});
+  const root = await mkdtemp(path.join(parent, 'ast-grammar-'));
+  assert.ok(root.startsWith(parent + path.sep));
+  t.after(() => rm(root, {recursive:true, force:true}));
+  await mkdir(path.join(root, 'evidence/web/objects'), {recursive:true});
+  await mkdir(path.join(root, 'recovered'));
+  // yield is a valid binding in a non-strict script; reparsing as a module
+  // would introduce a new strict-mode rejection absent from the source.
+  const raw = '(t,e,a)=>{var yield=0;a.value=200}';
+  const prefix = '(globalThis.TURBOPACK||(globalThis.TURBOPACK=[])).push(["fixture",1,';
+  const text = prefix + raw + ']);';
+  const source = 'evidence/web/objects/fixture.js', url = 'https://example.invalid/fixture.js';
+  await writeFile(path.join(root, source), text);
+  await writeFile(path.join(root, 'evidence/web/manifest.json'), JSON.stringify({records:[{
+    path:source,url,status:200,bytes:Buffer.byteLength(text),sha256:sha256(text),
+  }]}));
+  await writeFile(path.join(root, 'recovered/modules.json'), JSON.stringify({rangeEncoding:RANGE_ENCODING,modules:[{
+    ids:[1],sha256:sha256(raw),origins:[{source,url,start:prefix.length,end:prefix.length+raw.length}],
+  }]}));
+  const local = await openCorpus(root), factory = await local.factory(1);
+  assert.equal(factory.capture.ast.program.sourceType, 'script');
+  const value = findNodes(factory.node, n => n.type === 'NumericLiteral' && n.value === 200)[0];
+  assert.equal(await createSchemaExtractor(local).constant(value, factory), 200);
 });

@@ -37,7 +37,7 @@ export function createSchemaExtractor(corpus, { sources = {} } = {}) {
     if (!syntax.has(identity)) {
       // Reparse original source privately. The caller-visible AST may have been
       // cloned or mutated; source positions alone do not bind its values.
-      const parsed = parseExpression(factory.text(), { sourceType: 'module' });
+      const parsed = parseExpression(factory.text(), { sourceType: factory.capture.ast.program.sourceType });
       const nodes = new Map();
       walk(parsed, child => nodes.set(`${child.type}:${child.start}:${child.end}`, child));
       syntax.set(identity, { nodes, fingerprints: new Map() });
