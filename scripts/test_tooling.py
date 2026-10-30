@@ -2,6 +2,7 @@
 """Mutation tests ensuring the byte comparator cannot hide code/padding changes."""
 import struct
 import unittest
+from amm_sell.test_best_version import BestScoreVersionTests
 from amm_sell.test_sell_distance import AlignmentDistanceTests
 from types import SimpleNamespace
 import deep_section_analysis

@@ -11,7 +11,7 @@
 * Identical inputs (sell bytes + patch bytes + flags + link script) are built once per swarm:
   a repeat returns the cached result with "duplicate": true and is NOT re-logged.
 * Every executed attempt is appended to ATTEMPTS.jsonl (flock) and its sell.rs is kept in
-  sources/<sha256>.rs. BEST.json tracks the best non-losing attempt.
+  sources/<sha256>.rs. BEST-v<SCORE_VERSION>.json tracks the best non-losing attempt.
 
 Exit status: 0 = built and scored, 2 = build failed, 3 = SELL RAW-EQUAL (goal reached).
 """
@@ -35,7 +35,7 @@ LOG = SWARM / 'ATTEMPTS.jsonl'
 LOCK = SWARM / '.attempts.lock'
 CACHE = SWARM / 'cache'
 SOURCES = SWARM / 'sources'
-BEST = SWARM / 'BEST.json'
+BEST = SWARM / f'BEST-v{sell_score.SCORE_VERSION}.json'
 PRISTINE_SELL = SWARM / 'baselines/pristine-ws' / native_build.SELL_REL
 
 
